@@ -38,7 +38,7 @@ size_t NumberOfChunks = 0;
 
 typedef std::list<ChunkPointer> ChunkList;
 
-ChunkList smallMemoryBin[64];
+ChunkList smallMemoryBin[64];  //bin[0]是unsortBin
 ChunkList fastBin;
 
 //功能：将申请数量向8对齐，若小于16，直接返回16
@@ -71,8 +71,11 @@ ChunkPointer getNextChunk(ChunkPointer thisChunk) {
 int mergeEdgeChunkToTopChunk(ChunkPointer chunkToMerge) {
 	heapMemory = (PVOID)chunkToMerge;
 	hMemoryLeft = hMemoryLeft + (chunkToMerge->size CHUNK_SIZE_MASK) + 8;
+
+	//清零
+	ZeroMemory((PVOID)heapMemory, (edgeChunk->size CHUNK_SIZE_MASK) + 8);
+
 	edgeChunk = (ChunkPointer)(ChunkPointer)((char *)edgeChunk - edgeChunk->preSize - 8);
-	//TODO：清零
 	return 0;
 }
 
@@ -110,6 +113,20 @@ ChunkPointer mergeThisChunkToPreChunk(ChunkPointer thisChunk) {
 	return thisChunk;
 }
 
+
+//功能：向前递归合并，直至合并完前方全部空闲方块, 若前方不空闲，则返回本身
+ChunkPointer mergeThisChuckForwardUntilInUseChunk(ChunkPointer thisChunk) {
+	ChunkPointer tempChunk = thisChunk;
+	if (tempChunk->size PRE_USE_MASK) {
+		return tempChunk;
+	}
+	else {
+		tempChunk = mergeThisChunkToPreChunk(tempChunk);
+		tempChunk = mergeThisChuckForwardUntilInUseChunk(tempChunk);
+		return tempChunk;
+	}
+}
+
 //功能：设置此块为空闲状态
 int setThisChunkUnuse(ChunkPointer thisChunk) {
 	if (thisChunk != edgeChunk) {
@@ -122,12 +139,83 @@ int setThisChunkUnuse(ChunkPointer thisChunk) {
 	}
 }
 
+//功能：在fastbin里找到一个符合要求的块
+ChunkPointer searchFastBin(size_t sizeOfChunk) {
+	ChunkList::iterator it;
+	for (it = fastBin.begin(); it != fastBin.end(); it++) {
+		ChunkPointer tempChunkPointer = *it;
+		if (tempChunkPointer->size == sizeOfChunk) {
+			fastBin.erase(it);
+			return tempChunkPointer;
+		}
+	}
+	return NULL;
+}
+
+//功能：在smallbin里找到一个符合要求的块
+ChunkPointer searchSmallBin(size_t sizeOfChunk) {
+	int index = (sizeOfChunk / 8) - 1;      //可以通过简单的哈希从块大小得到bin索引
+	if (smallMemoryBin[index].empty()) {
+		return NULL;
+	}
+	else {
+		ChunkList::iterator it = smallMemoryBin[index].end();   //从尾部得到一个块
+		smallMemoryBin[index].pop_back();						//删除尾部
+		ChunkPointer tempChunkPointer = *it;
+
+		return tempChunkPointer;
+	}
+}
+
+//功能：整理fastbin并连接入bin[0]
+//合并思路：遍历所有fastbin chunk将其下一个块的preUse置为0，然后重新遍历所有找preUse为0的。向前递归合并。
+void cleanFastBin(void) {
+	ChunkList::iterator it;
+	//修改标志过程
+	for (it = fastBin.begin(); it != fastBin.end(); it++) {
+		ChunkPointer tempChunkPointer = *it;
+		ChunkPointer nextChunkPointer = getNextChunk(tempChunkPointer);
+		nextChunkPointer->size = nextChunkPointer->size SET_PRE_UNUSE;
+	}
+	//合并过程
+	for (it = fastBin.begin(); it != fastBin.end(); it++) {
+		ChunkPointer tempChunkPointer = *it;
+		if (tempChunkPointer->size != 0) { //如果size为0 说明此块已经被合并进其他块了 
+			tempChunkPointer = mergeThisChuckForwardUntilInUseChunk(tempChunkPointer);					 //无论前方是否有空闲都尝试向前合并结果加入bin[0]
+			smallMemoryBin[0].push_front(tempChunkPointer);
+			ZeroMemory((PVOID)((char*)tempChunkPointer + 8), (tempChunkPointer->size CHUNK_SIZE_MASK));  //仅仅把数据块清空
+		}
+	}
+
+	//合并所有的fastbin块后 将fastbin清空
+	fastBin.clear();
+}
 
 //MYMALLOC
 char * myMalloc(size_t sizeOfMemoryInBytes) {
+	size_t realDataSize;
+	realDataSize = alignTo(sizeOfMemoryInBytes, MALLOC_ALIGNMENT);
+
+	if (sizeOfMemoryInBytes > 0 && sizeOfMemoryInBytes <= MAX_FAST_SIZE) {				//若在max_fast范围内，优先查找fastbin
+		ChunkPointer fastBinResult;
+		if (fastBinResult = searchFastBin(realDataSize)) {
+			return (char*)fastBinResult + 8;											//找到就返回数据块
+		}
+	}
+
+	if (sizeOfMemoryInBytes > 0 && sizeOfMemoryInBytes <= SMALL_BIN_MAX_SIZE) {			//没能在fastbin找到的情况下，在smallBin中寻找
+		ChunkPointer smallBinResult;
+		if (smallBinResult = searchSmallBin(realDataSize)) {							
+			return (char *)smallBinResult + 8;											//找到则返回
+		}
+		else {
+			cleanFastBin();																//若没有找到，则整理fastBin
+
+		}
+	}
 	if (sizeOfMemoryInBytes > 0 && sizeOfMemoryInBytes <= SMALL_BIN_MAX_SIZE) {
 		ChunkPointer newChunk = (ChunkPointer)heapMemory;
-		size_t realDataSize = alignTo(sizeOfMemoryInBytes, MALLOC_ALIGNMENT);
+		realDataSize = alignTo(sizeOfMemoryInBytes, MALLOC_ALIGNMENT);
 		heapMemory = (char *)heapMemory + realDataSize + 8;
 		hMemoryLeft = hMemoryLeft - realDataSize - 8;   //消耗已提交页共数据块+数据大小标志区
 		if (edgeChunk) {								//如果存在edgeChunk说明并非第一次分配内存,edgeChunk将是前一个块,并且前一个块要么在fastBin里要么还在使用
@@ -163,7 +251,7 @@ int myFree(char * memToFree) {
 
 
 	if (tempChunkPointer->size <= MAX_FAST_SIZE && tempChunkPointer != edgeChunk) {		//小于64B并且不是边缘块的才会被加入fastBin
-		fastBin.push_back(tempChunkPointer);
+		fastBin.push_front(tempChunkPointer);
 		return 1;
 	}
 	else {
@@ -181,7 +269,7 @@ int myFree(char * memToFree) {
 					ChunkPointer nextChunk = getNextChunk(tempChunkPointer);
 					nextChunk = mergeThisChunkToPreChunk(nextChunk);
 					if (nextChunk == tempChunkPointer) {					//加入Bin中并设置为空闲
-						smallMemoryBin[0].push_back(tempChunkPointer);
+						smallMemoryBin[0].push_front(tempChunkPointer);
 						setThisChunkUnuse(tempChunkPointer);
 					}
 					else {
@@ -206,7 +294,7 @@ int myFree(char * memToFree) {
 					ChunkPointer nextChunk = getNextChunk(tempChunkPointer);
 					nextChunk = mergeThisChunkToPreChunk(nextChunk);
 					if (nextChunk == tempChunkPointer) {					//加入Bin中并设置为空闲
-						smallMemoryBin[0].push_back(tempChunkPointer);
+						smallMemoryBin[0].push_front(tempChunkPointer);
 						setThisChunkUnuse(tempChunkPointer);	
 					}
 					else {
