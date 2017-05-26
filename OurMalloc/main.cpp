@@ -177,8 +177,29 @@ ChunkPointer searchLargeBin(size_t sizeOfChunk) {
 
 	for (it = largeBin.begin(); it != largeBin.end(); it++) {
 		ChunkPointer tempChunkPointer = it->second;
-		if(tempChunkPointer)
+		if (tempChunkPointer->size CHUNK_SIZE_MASK >= sizeOfChunk) {
+			size_t leftChunkSize = (tempChunkPointer->size CHUNK_SIZE_MASK) - 8 - sizeOfChunk; //被切割走数据块大小和标志位大小
+			if (leftChunkSize < 16) {														   //为了防止以后出bug，剩下的块太小的话就都分给人家
+				largeBin.erase(it);
+				return tempChunkPointer;
+			}
+			//创建剩下部分的块信息
+			ChunkPointer leftChunkPointer = (ChunkPointer)((char *)tempChunkPointer + 8 + sizeOfChunk);
+			leftChunkPointer->size = leftChunkSize SET_PRE_IN_USE;
+			leftChunkPointer->preSize = sizeOfChunk;
+
+			largeBin.erase(it);
+			if (leftChunkSize > 512)
+				putInLargeBin(leftChunkPointer);
+			else {
+				putInSmallBin(leftChunkPointer);
+			}
+
+			return tempChunkPointer;
+		}
 	}
+
+	return NULL;
 }
 
 //放入smallbin
@@ -233,6 +254,36 @@ void cleanUnsortBin(void) {
 	smallMemoryBin[0].clear();
 }
 
+//
+
+ChunkPointer newChunkFromTopChunk(size_t sizeOfMemoryInBytes) {
+	size_t realDataSize = alignTo(sizeOfMemoryInBytes, MALLOC_ALIGNMENT);
+	if (sizeOfMemoryInBytes > 0 && sizeOfMemoryInBytes<= hMemoryLeft) {
+		ChunkPointer newChunk = (ChunkPointer)heapMemory;
+
+		heapMemory = (char *)heapMemory + realDataSize + 8;
+		hMemoryLeft = hMemoryLeft - realDataSize - 8;   //消耗已提交页共数据块+数据大小标志区
+		if (edgeChunk) {								//如果存在edgeChunk说明并非第一次分配内存,edgeChunk将是前一个块,并且前一个块要么在fastBin里要么还在使用
+			newChunk->preSize = edgeChunk->size;
+			newChunk->size = newChunk->size SET_PRE_IN_USE;
+		}
+		else {
+			newChunk->preSize = 0;
+			newChunk->size = newChunk->size SET_PRE_UNUSE;
+		}
+
+		newChunk->size = realDataSize;
+		edgeChunk = newChunk;
+		if (NumberOfChunks == 0) {
+			newChunk->size = newChunk->size SET_PRE_IN_USE;
+		}
+		NumberOfChunks++;
+		return newChunk;				//返回新分配块的数据块地址
+	}
+	else {
+		return NULL;
+	}
+}
 //MYMALLOC
 char * myMalloc(size_t sizeOfMemoryInBytes) {
 	size_t realDataSize;
@@ -279,33 +330,26 @@ char * myMalloc(size_t sizeOfMemoryInBytes) {
 				if (smallBinResult = searchSmallBin(realDataSize)) {							   //这里我认为再次搜索一次smallbin比较好
 					return (char *)smallBinResult + 8;
 				}
-
+				ChunkPointer largeBinResult;
+				if (largeBinResult = searchLargeBin(realDataSize)) {
+					return (char *)largeBinResult + 8;
+				}
+				else {
+					return (char*)newChunkFromTopChunk(realDataSize) + 8;
+				}
 
 			}
 		}
 	}
-	if (sizeOfMemoryInBytes > 0 && sizeOfMemoryInBytes <= SMALL_BIN_MAX_SIZE) {
-		ChunkPointer newChunk = (ChunkPointer)heapMemory;
-		realDataSize = alignTo(sizeOfMemoryInBytes, MALLOC_ALIGNMENT);
-		heapMemory = (char *)heapMemory + realDataSize + 8;
-		hMemoryLeft = hMemoryLeft - realDataSize - 8;   //消耗已提交页共数据块+数据大小标志区
-		if (edgeChunk) {								//如果存在edgeChunk说明并非第一次分配内存,edgeChunk将是前一个块,并且前一个块要么在fastBin里要么还在使用
-			newChunk->preSize = edgeChunk->size;
-			newChunk->size = newChunk->size SET_PRE_IN_USE;
+	else {
+		ChunkPointer aLargeChunkToFind;
+		aLargeChunkToFind = searchLargeBin(sizeOfMemoryInBytes);
+		if (aLargeChunkToFind) {
+			return (char *)aLargeChunkToFind + 8;
 		}
 		else {
-			newChunk->preSize = 0;
-			newChunk->size = newChunk->size SET_PRE_UNUSE;
+			return (char *)newChunkFromTopChunk(sizeOfMemoryInBytes) + 8;
 		}
-
-		newChunk->size = realDataSize;
-		edgeChunk = newChunk;
-		if (NumberOfChunks == 0) {
-			newChunk->size = newChunk->size SET_PRE_IN_USE;
-		}
-		NumberOfChunks++;
-		return (char *)newChunk + 8;					//返回新分配块的数据块地址
-
 	}
 
 	return NULL;
@@ -389,7 +433,8 @@ int myFree(char * memToFree) {
 			}
 
 			if (tempChunkPointer->size > FASTBIN_CONSOLIDATION_THRESHOLD) {
-				//TODO:Merging FastBin
+				//Merging FastBin
+				cleanFastBin();
 			}
 
 			return 2;
