@@ -34,6 +34,7 @@ LPVOID heapMemory;
 size_t hMemoryLeft;
 ChunkPointer edgeChunk;
 
+size_t NumberOfChunks = 0;
 
 typedef std::list<ChunkPointer> ChunkList;
 
@@ -59,29 +60,6 @@ void myMallocInit(void) {
 	hMemoryLeft = 1 << 26;
 }
 
-char * myMalloc(size_t sizeOfMemoryInBytes) {
-	if (sizeOfMemoryInBytes > 0 && sizeOfMemoryInBytes <= SMALL_BIN_MAX_SIZE) {
-		ChunkPointer newChunk = (ChunkPointer)heapMemory;
-		size_t realDataSize = alignTo(sizeOfMemoryInBytes, MALLOC_ALIGNMENT);
-		heapMemory =  (char *)heapMemory + realDataSize + 8;
-		hMemoryLeft = hMemoryLeft - realDataSize - 8;   //消耗已提交页共数据块+数据大小标志区
-		if (edgeChunk) {								//如果存在edgeChunk说明并非第一次分配内存,edgeChunk将是前一个块,并且前一个块要么在fastBin里要么还在使用
-			newChunk->preSize = edgeChunk->size;
-			newChunk->size = newChunk->size SET_PRE_IN_USE;
-		}
-		else {
-			newChunk->preSize = 0;
-			newChunk->size = newChunk->size SET_PRE_UNUSE;
-		}
-
-		newChunk->size = realDataSize;
-		edgeChunk = newChunk;
-		return (char *)newChunk + 8;					//返回新分配块的数据块地址
-
-	}
-
-	return NULL;
-}
 
 //功能：得到下一个Chunk
 ChunkPointer getNextChunk(ChunkPointer thisChunk) {
@@ -144,6 +122,35 @@ int setThisChunkUnuse(ChunkPointer thisChunk) {
 	}
 }
 
+
+//MYMALLOC
+char * myMalloc(size_t sizeOfMemoryInBytes) {
+	if (sizeOfMemoryInBytes > 0 && sizeOfMemoryInBytes <= SMALL_BIN_MAX_SIZE) {
+		ChunkPointer newChunk = (ChunkPointer)heapMemory;
+		size_t realDataSize = alignTo(sizeOfMemoryInBytes, MALLOC_ALIGNMENT);
+		heapMemory = (char *)heapMemory + realDataSize + 8;
+		hMemoryLeft = hMemoryLeft - realDataSize - 8;   //消耗已提交页共数据块+数据大小标志区
+		if (edgeChunk) {								//如果存在edgeChunk说明并非第一次分配内存,edgeChunk将是前一个块,并且前一个块要么在fastBin里要么还在使用
+			newChunk->preSize = edgeChunk->size;
+			newChunk->size = newChunk->size SET_PRE_IN_USE;
+		}
+		else {
+			newChunk->preSize = 0;
+			newChunk->size = newChunk->size SET_PRE_UNUSE;
+		}
+
+		newChunk->size = realDataSize;
+		edgeChunk = newChunk;
+		if (NumberOfChunks == 0) {
+			newChunk->size = newChunk->size SET_PRE_IN_USE;
+		}
+		NumberOfChunks++;
+		return (char *)newChunk + 8;					//返回新分配块的数据块地址
+
+	}
+
+	return NULL;
+}
 
 //MYFREE
 int myFree(char * memToFree) {
