@@ -1,5 +1,6 @@
 #include <iostream>
 #include <list>
+#include <map>
 #include <Windows.h>
 #include <atomic>
 
@@ -40,6 +41,9 @@ typedef std::list<ChunkPointer> ChunkList;
 
 ChunkList smallMemoryBin[64];  //bin[0]是unsortBin
 ChunkList fastBin;
+
+std::map<size_t, ChunkPointer> largeBin;	//创建一颗红黑树
+
 
 //功能：将申请数量向8对齐，若小于16，直接返回16
 size_t alignTo(size_t fromNum,size_t toNum) {
@@ -167,6 +171,27 @@ ChunkPointer searchSmallBin(size_t sizeOfChunk) {
 	}
 }
 
+//功能：在largebin里按最优分配算法找一个最符合要求的块并切割
+ChunkPointer searchLargeBin(size_t sizeOfChunk) {
+	std::map<size_t, ChunkPointer>::iterator it;
+
+	for (it = largeBin.begin(); it != largeBin.end(); it++) {
+		ChunkPointer tempChunkPointer = it->second;
+		if(tempChunkPointer)
+	}
+}
+
+//放入smallbin
+void putInSmallBin(ChunkPointer thisChunk) {
+	int index = thisChunk->size CHUNK_SIZE_MASK / 8 - 1;
+	smallMemoryBin[index].push_front(thisChunk);
+}
+
+//放入largebin
+void putInLargeBin(ChunkPointer thisChunk) {
+	largeBin.insert(std::map<size_t, ChunkPointer>::value_type(thisChunk->size CHUNK_SIZE_MASK, thisChunk));
+}
+
 //功能：整理fastbin并连接入bin[0]
 //合并思路：遍历所有fastbin chunk将其下一个块的preUse置为0，然后重新遍历所有找preUse为0的。向前递归合并。
 void cleanFastBin(void) {
@@ -191,6 +216,23 @@ void cleanFastBin(void) {
 	fastBin.clear();
 }
 
+//功能：整理unsortbin进入smallbin和largebin
+void cleanUnsortBin(void) {
+	ChunkList::iterator it;
+
+	for (it = smallMemoryBin[0].begin(); it != fastBin.end(); it++) {
+		ChunkPointer tempChunkPointer = *it;
+		if (tempChunkPointer->size CHUNK_SIZE_MASK <= 512 && tempChunkPointer->size CHUNK_SIZE_MASK > 0) {
+			putInSmallBin(tempChunkPointer);
+		}
+		else {
+			putInLargeBin(tempChunkPointer);
+		}
+	}
+
+	smallMemoryBin[0].clear();
+}
+
 //MYMALLOC
 char * myMalloc(size_t sizeOfMemoryInBytes) {
 	size_t realDataSize;
@@ -210,7 +252,36 @@ char * myMalloc(size_t sizeOfMemoryInBytes) {
 		}
 		else {
 			cleanFastBin();																//若没有找到，则整理fastBin
+			if (smallMemoryBin[0].size() == 1 && ((* smallMemoryBin[0].begin()) ->size CHUNK_SIZE_MASK) >= realDataSize) {											//若unsortBin只有一块，那直接切割最方便
+				ChunkPointer unsortBinResult = * smallMemoryBin[0].begin();
+				size_t leftChunkSize = (unsortBinResult->size CHUNK_SIZE_MASK) - 8 - realDataSize; //被切割走数据块大小和标志位大小
+				//size_t theChunkSign = unsortBinResult->size CHUNK_SIGN_MASK;
+				//size_t theChunkPreSize = unsortBinResult->preSize;
+				if (leftChunkSize < 16) {														   //为了防止以后出bug，剩下的块太小的话就都分给人家
+					smallMemoryBin[0].pop_back();
+					return (char *)unsortBinResult + 8;
+				}
+																								   //创建剩下部分的块信息
+				ChunkPointer leftChunkPoint = (ChunkPointer)((char *)unsortBinResult + 8 + realDataSize);
+				leftChunkPoint->size = leftChunkSize SET_PRE_IN_USE;
+				leftChunkPoint->preSize = realDataSize;
 
+				smallMemoryBin[0].pop_back();													   //将切割后的换回unsortbin
+				smallMemoryBin[0].push_front(leftChunkPoint);
+
+
+				unsortBinResult->size = realDataSize + unsortBinResult->size CHUNK_SIGN_MASK;      //更新切割出块的信息 仅有size变了
+
+				return (char *)unsortBinResult + 8;
+			}
+			else {
+				cleanUnsortBin();
+				if (smallBinResult = searchSmallBin(realDataSize)) {							   //这里我认为再次搜索一次smallbin比较好
+					return (char *)smallBinResult + 8;
+				}
+
+
+			}
 		}
 	}
 	if (sizeOfMemoryInBytes > 0 && sizeOfMemoryInBytes <= SMALL_BIN_MAX_SIZE) {
