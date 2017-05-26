@@ -40,6 +40,7 @@ typedef std::list<ChunkPointer> ChunkList;
 ChunkList smallMemoryBin[64];
 ChunkList fastBin;
 
+//功能：将申请数量向8对齐，若小于16，直接返回16
 size_t alignTo(size_t fromNum,size_t toNum) {
 	size_t temp = fromNum % toNum;
 	size_t resultNumber = (toNum - temp + fromNum);
@@ -51,6 +52,7 @@ size_t alignTo(size_t fromNum,size_t toNum) {
 	}
 }
 
+//功能：使用Malloc前必须调用，提交进程专属的64M页面
 void myMallocInit(void) {
 	heapMemory = VirtualAlloc(NULL, 1 << 26, MEM_COMMIT, \
 		PAGE_EXECUTE_READWRITE);
@@ -81,6 +83,69 @@ char * myMalloc(size_t sizeOfMemoryInBytes) {
 	return NULL;
 }
 
+//功能：得到下一个Chunk
+ChunkPointer getNextChunk(ChunkPointer thisChunk) {
+	ChunkPointer nextChunk = (ChunkPointer)((char *)thisChunk + (thisChunk->size CHUNK_SIZE_MASK) + 8);
+	return nextChunk;
+}
+
+//功能：将边缘Chunk合并进TopChunk
+int mergeEdgeChunkToTopChunk(ChunkPointer chunkToMerge) {
+	heapMemory = (PVOID)chunkToMerge;
+	hMemoryLeft = hMemoryLeft + (chunkToMerge->size CHUNK_SIZE_MASK) + 8;
+	edgeChunk = (ChunkPointer)(ChunkPointer)((char *)edgeChunk - edgeChunk->preSize - 8);
+	//TODO：清零
+	return 0;
+}
+
+//功能：判断下一个Chunk是否使用中
+int nextChunkIsInUse(ChunkPointer thisChunk) {
+	ChunkPointer nextChunk = getNextChunk(thisChunk);
+	if (nextChunk != edgeChunk) {					//只有非边缘Chunk才有可能有下一个Chunk，才能得到P标记位
+		ChunkPointer nextNextChunk = getNextChunk(nextChunk);
+		if (nextNextChunk->size PRE_USE_MASK) {
+			return 1;
+		}
+		else {
+			return 0;								//P标志位为0 说明下一个Chunk不在使用
+		}
+	}
+	else {
+		return 1;									//若下一个Chunk为边缘块，则必然在使用中（应该是）
+	}
+}
+
+//功能：将这个块向前合并，注意先确定前一个块是否为空闲，并根据情况选择是否修改边缘块地址
+//返回：返回合并后的Chunk
+ChunkPointer mergeThisChunkToPreChunk(ChunkPointer thisChunk) {
+	size_t mergedChunkSize = (thisChunk->size CHUNK_SIZE_MASK) + thisChunk->preSize + 8;		//合并之后的实际大小为这个数据块的大小加8Bsize位加前一个块的大小
+	if (thisChunk == edgeChunk) {				
+		edgeChunk = (ChunkPointer)((char *)edgeChunk - edgeChunk->preSize - 8);
+	}
+	thisChunk = (ChunkPointer)((char *)thisChunk - thisChunk->preSize - 8);	 //此块地址移动到前一个块地址
+	thisChunk->size = (thisChunk->size CHUNK_SIGN_MASK) + mergedChunkSize;   //更新新块的size并补充标志位
+	if (thisChunk != edgeChunk) {
+		ChunkPointer nextChunk = (ChunkPointer)((char *)thisChunk + (thisChunk->size CHUNK_SIZE_MASK) + 8);
+		nextChunk->preSize = mergedChunkSize;								 //如果不是边缘块，应更新下一个Chunk的preSize
+	}
+
+	return thisChunk;
+}
+
+//功能：设置此块为空闲状态
+int setThisChunkUnuse(ChunkPointer thisChunk) {
+	if (thisChunk != edgeChunk) {
+		ChunkPointer nextChunk = getNextChunk(thisChunk);
+		nextChunk->size = nextChunk->size SET_PRE_UNUSE;
+		return 1;
+	}
+	else {
+		return 0;
+	}
+}
+
+
+//MYFREE
 int myFree(char * memToFree) {
 
 	if (memToFree == NULL)
@@ -90,41 +155,71 @@ int myFree(char * memToFree) {
 
 
 
-	if (tempChunkPointer->size <= MAX_FAST_SIZE && tempChunkPointer != edgeChunk) {
+	if (tempChunkPointer->size <= MAX_FAST_SIZE && tempChunkPointer != edgeChunk) {		//小于64B并且不是边缘块的才会被加入fastBin
 		fastBin.push_back(tempChunkPointer);
 		return 1;
 	}
 	else {
-		if (tempChunkPointer->size PRE_USE_MASK) {				//
-
-		}
-		else {
-			//如果前一个块空闲合并两个块，若此块为egdeChunk，应改变edgeChunk指向
-			size_t mergedChunkSize = (tempChunkPointer->size CHUNK_SIZE_MASK) + tempChunkPointer->preSize;
+		if (tempChunkPointer->size PRE_USE_MASK) {				
+			//如果前一个块没有空闲，那就直接考虑此块是否为边缘块
 			if (tempChunkPointer == edgeChunk) {
-				edgeChunk = (ChunkPointer)((char *)tempChunkPointer - tempChunkPointer->preSize - 8);
-			}
-			tempChunkPointer = (ChunkPointer)((char *)tempChunkPointer - tempChunkPointer->preSize - 8);
-			tempChunkPointer->size = (tempChunkPointer->size CHUNK_SIGN_MASK) + mergedChunkSize;
-
-			if (tempChunkPointer == edgeChunk) {
-				heapMemory = (PVOID)tempChunkPointer;
-				hMemoryLeft = hMemoryLeft + (edgeChunk->size CHUNK_SIZE_MASK) + 8;
-				edgeChunk = (ChunkPointer)((char *)edgeChunk - edgeChunk->preSize - 8);
+				mergeEdgeChunkToTopChunk(tempChunkPointer);	//如果是，合并回TopChunk
 			}
 			else {
-				ChunkPointer nextChunk = (ChunkPointer)((char *)tempChunkPointer + (tempChunkPointer->size CHUNK_SIZE_MASK) + 8);
-				if (nextChunk != edgeChunk) {
-					ChunkPointer nextNextChunk = (ChunkPointer)((char *)nextChunk + (nextChunk->size CHUNK_SIZE_MASK) + 8);
-					if (nextNextChunk->size PRE_USE_MASK) {
+				//判断下一个块是否在使用，若空闲合并，并加入bin[0]，
+				if (nextChunkIsInUse(tempChunkPointer)) {
 
+				}
+				else {
+					ChunkPointer nextChunk = getNextChunk(tempChunkPointer);
+					nextChunk = mergeThisChunkToPreChunk(nextChunk);
+					if (nextChunk == tempChunkPointer) {					//加入Bin中并设置为空闲
+						smallMemoryBin[0].push_back(tempChunkPointer);
+						setThisChunkUnuse(tempChunkPointer);
 					}
 					else {
-						tempChunkPointer->size = (tempChunkPointer->size CHUNK_SIGN_MASK) + (tempChunkPointer->size CHUNK_SIZE_MASK) + nextNextChunk->preSize;
-						smallMemoryBin[0].push_back(tempChunkPointer);
-						nextNextChunk->size = nextNextChunk->size SET_PRE_UNUSE;
+						//如果合并后的指针不相同，则出错
 					}
 				}
+			}
+		}
+		else {
+			//如果前一个块空闲则合并两个块
+			tempChunkPointer = mergeThisChunkToPreChunk(tempChunkPointer);
+
+			if (tempChunkPointer == edgeChunk) {
+				mergeEdgeChunkToTopChunk(tempChunkPointer);
+			}
+			else {
+				//判断下一个块是否在使用，若空闲合并，并加入bin[0]，
+				if (nextChunkIsInUse(tempChunkPointer)) {
+
+				}
+				else {
+					ChunkPointer nextChunk = getNextChunk(tempChunkPointer);
+					nextChunk = mergeThisChunkToPreChunk(nextChunk);
+					if (nextChunk == tempChunkPointer) {					//加入Bin中并设置为空闲
+						smallMemoryBin[0].push_back(tempChunkPointer);
+						setThisChunkUnuse(tempChunkPointer);	
+					}
+					else {
+						//如果合并后的指针不相同，则出错
+					}
+				}
+
+				//重构前代码，不要删，下方代码应该和上方代码功能相同。功能：判断下一个块是否在使用，若空闲合并，并加入bin[0]，
+				//ChunkPointer nextChunk = (ChunkPointer)((char *)tempChunkPointer + (tempChunkPointer->size CHUNK_SIZE_MASK) + 8);
+				//if (nextChunk != edgeChunk) {
+				//	ChunkPointer nextNextChunk = (ChunkPointer)((char *)nextChunk + (nextChunk->size CHUNK_SIZE_MASK) + 8);
+				//	if (nextNextChunk->size PRE_USE_MASK) {
+
+				//	}
+				//	else {
+				//		tempChunkPointer->size = (tempChunkPointer->size CHUNK_SIGN_MASK) + (tempChunkPointer->size CHUNK_SIZE_MASK) + nextNextChunk->preSize;
+				//		smallMemoryBin[0].push_back(tempChunkPointer);
+				//		nextNextChunk->size = nextNextChunk->size SET_PRE_UNUSE;
+				//	}
+				//}
 			}
 
 			if (tempChunkPointer->size > FASTBIN_CONSOLIDATION_THRESHOLD) {
