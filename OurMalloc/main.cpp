@@ -64,6 +64,16 @@ void myMallocInit(void) {
 	hMemoryLeft = 1 << 26;
 }
 
+//放入smallbin
+void putInSmallBin(ChunkPointer thisChunk) {
+	int index = thisChunk->size CHUNK_SIZE_MASK / 8 - 1;
+	smallMemoryBin[index].push_front(thisChunk);
+}
+
+//放入largebin
+void putInLargeBin(ChunkPointer thisChunk) {
+	largeBin.insert(std::map<size_t, ChunkPointer>::value_type(thisChunk->size CHUNK_SIZE_MASK, thisChunk));
+}
 
 //功能：得到下一个Chunk
 ChunkPointer getNextChunk(ChunkPointer thisChunk) {
@@ -202,16 +212,7 @@ ChunkPointer searchLargeBin(size_t sizeOfChunk) {
 	return NULL;
 }
 
-//放入smallbin
-void putInSmallBin(ChunkPointer thisChunk) {
-	int index = thisChunk->size CHUNK_SIZE_MASK / 8 - 1;
-	smallMemoryBin[index].push_front(thisChunk);
-}
 
-//放入largebin
-void putInLargeBin(ChunkPointer thisChunk) {
-	largeBin.insert(std::map<size_t, ChunkPointer>::value_type(thisChunk->size CHUNK_SIZE_MASK, thisChunk));
-}
 
 //功能：整理fastbin并连接入bin[0]
 //合并思路：遍历所有fastbin chunk将其下一个块的preUse置为0，然后重新遍历所有找preUse为0的。向前递归合并。
@@ -241,7 +242,7 @@ void cleanFastBin(void) {
 void cleanUnsortBin(void) {
 	ChunkList::iterator it;
 
-	for (it = smallMemoryBin[0].begin(); it != fastBin.end(); it++) {
+	for (it = smallMemoryBin[0].begin(); it != smallMemoryBin[0].end(); it++) {
 		ChunkPointer tempChunkPointer = *it;
 		if (tempChunkPointer->size CHUNK_SIZE_MASK <= 512 && tempChunkPointer->size CHUNK_SIZE_MASK > 0) {
 			putInSmallBin(tempChunkPointer);
