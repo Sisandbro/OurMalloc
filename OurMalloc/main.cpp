@@ -61,7 +61,7 @@ size_t alignTo(size_t fromNum,size_t toNum) {
 void myMallocInit(void) {
 	heapMemory = VirtualAlloc(NULL, 1 << 26, MEM_COMMIT, \
 		PAGE_EXECUTE_READWRITE);
-	hMemoryLeft = 1 << 26;
+	hMemoryLeft = 1 << 26 - 8;
 }
 
 //·ÅÈësmallbin
