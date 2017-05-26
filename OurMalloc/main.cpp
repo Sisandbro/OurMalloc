@@ -473,6 +473,13 @@ int main(void) {
 
 	char * testMemory = myMalloc(11);
 
+
+	myFree(testMemory);
+	testMemory = myMalloc(1024);
+	myFree(testMemory);
+	testMemory = myMalloc(512);
+	myFree(testMemory);
+	testMemory = myMalloc(1024000);
 	myFree(testMemory);
 	std::cin.get();
 	return 0;
