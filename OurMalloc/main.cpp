@@ -3,6 +3,7 @@
 #include <map>
 #include <Windows.h>
 #include <atomic>
+#include <algorithm> 
 
 //32Bit system size_t is 4 bytes
 #ifndef INTERNAL_SIZE_T 
@@ -233,7 +234,11 @@ void cleanFastBin(void) {
 			ZeroMemory((PVOID)((char*)tempChunkPointer + 8), (tempChunkPointer->size CHUNK_SIZE_MASK));  //仅仅把数据块清空
 		}
 	}
-
+	//存储
+	//for (it = fastBin.begin(); it != fastBin.end(); it++) {
+	//	ChunkPointer tempChunk
+	//}
+	smallMemoryBin[0].erase(unique(smallMemoryBin[0].begin(), smallMemoryBin[0].end()), smallMemoryBin[0].end());
 	//合并所有的fastbin块后 将fastbin清空
 	fastBin.clear();
 }
@@ -379,7 +384,7 @@ int myFree(char * memToFree) {
 			else {
 				//判断下一个块是否在使用，若空闲合并，并加入bin[0]，
 				if (nextChunkIsInUse(tempChunkPointer)) {
-
+					smallMemoryBin[0].push_front(tempChunkPointer);
 				}
 				else {
 					ChunkPointer nextChunk = getNextChunk(tempChunkPointer);
