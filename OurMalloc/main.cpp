@@ -34,9 +34,9 @@ typedef struct myChunk {
 
 LPVOID heapMemory;
 size_t hMemoryLeft;
-ChunkPointer edgeChunk;
-
-size_t NumberOfChunks = 0;
+ChunkPointer edgeChunk = NULL;
+//
+//size_t NumberOfChunks = 0;
 
 typedef std::list<ChunkPointer> ChunkList;
 
@@ -188,7 +188,7 @@ ChunkPointer searchLargeBin(size_t sizeOfChunk) {
 
 	for (it = largeBin.begin(); it != largeBin.end(); it++) {
 		ChunkPointer tempChunkPointer = it->second;
-		if (tempChunkPointer->size CHUNK_SIZE_MASK >= sizeOfChunk) {
+		if ((tempChunkPointer->size CHUNK_SIZE_MASK) >= sizeOfChunk) {
 			size_t leftChunkSize = (tempChunkPointer->size CHUNK_SIZE_MASK) - 8 - sizeOfChunk; //被切割走数据块大小和标志位大小
 			if (leftChunkSize < 16) {														   //为了防止以后出bug，剩下的块太小的话就都分给人家
 				largeBin.erase(it);
@@ -249,7 +249,7 @@ void cleanUnsortBin(void) {
 
 	for (it = smallMemoryBin[0].begin(); it != smallMemoryBin[0].end(); it++) {
 		ChunkPointer tempChunkPointer = *it;
-		if (tempChunkPointer->size CHUNK_SIZE_MASK <= 512 && tempChunkPointer->size CHUNK_SIZE_MASK > 0) {
+		if (tempChunkPointer->size CHUNK_SIZE_MASK <= 512 && (tempChunkPointer->size CHUNK_SIZE_MASK) > 0) {
 			putInSmallBin(tempChunkPointer);
 		}
 		else {
@@ -264,6 +264,7 @@ void cleanUnsortBin(void) {
 
 ChunkPointer newChunkFromTopChunk(size_t sizeOfMemoryInBytes) {
 	size_t realDataSize = alignTo(sizeOfMemoryInBytes, MALLOC_ALIGNMENT);
+
 	if (sizeOfMemoryInBytes > 0 && sizeOfMemoryInBytes<= hMemoryLeft) {
 		ChunkPointer newChunk = (ChunkPointer)heapMemory;
 
@@ -271,19 +272,21 @@ ChunkPointer newChunkFromTopChunk(size_t sizeOfMemoryInBytes) {
 		hMemoryLeft = hMemoryLeft - realDataSize - 8;   //消耗已提交页共数据块+数据大小标志区
 		if (edgeChunk) {								//如果存在edgeChunk说明并非第一次分配内存,edgeChunk将是前一个块,并且前一个块要么在fastBin里要么还在使用
 			newChunk->preSize = edgeChunk->size;
+			newChunk->size = realDataSize;
 			newChunk->size = newChunk->size SET_PRE_IN_USE;
 		}
 		else {
 			newChunk->preSize = 0;
-			newChunk->size = newChunk->size SET_PRE_UNUSE;
+			newChunk->size = realDataSize;
+			newChunk->size = newChunk->size SET_PRE_IN_USE; //如果不存在edgeChunk 说明是第一个Chunk，P应设置为inuse防止越界
 		}
 
-		newChunk->size = realDataSize;
+		//newChunk->size = realDataSize;
 		edgeChunk = newChunk;
-		if (NumberOfChunks == 0) {
-			newChunk->size = newChunk->size SET_PRE_IN_USE;
-		}
-		NumberOfChunks++;
+		//if (NumberOfChunks == 0) {
+		//	newChunk->size = newChunk->size SET_PRE_IN_USE;
+		//}
+		//NumberOfChunks++;
 		return newChunk;				//返回新分配块的数据块地址
 	}
 	else {
@@ -385,6 +388,7 @@ int myFree(char * memToFree) {
 				//判断下一个块是否在使用，若空闲合并，并加入bin[0]，
 				if (nextChunkIsInUse(tempChunkPointer)) {
 					smallMemoryBin[0].push_front(tempChunkPointer);
+					setThisChunkUnuse(tempChunkPointer);
 				}
 				else {
 					ChunkPointer nextChunk = getNextChunk(tempChunkPointer);
