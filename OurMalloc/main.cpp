@@ -2,7 +2,7 @@
 #include <list>
 #include <map>
 #include <Windows.h>
-#include <atomic>
+#include <mutex>
 #include <algorithm> 
 
 //32Bit system size_t is 4 bytes
@@ -34,7 +34,7 @@ typedef struct myChunk {
 }*ChunkPointer;
 
 typedef std::list<ChunkPointer> ChunkList;
-//
+//const
 LPVOID headOfMemory;
 
 //临界资源
@@ -46,6 +46,64 @@ ChunkPointer edgeChunk = NULL;
 std::map<size_t, ChunkPointer> largeBin;	//创建一颗红黑树
 
 //std::mutex cleanUnsortBinLock;
+//Bin操作锁
+std::mutex largeBinLock;
+std::mutex smallBinLock;
+std::mutex fastBinLock;
+//CAS操作系列
+std::mutex CASAtomic;
+bool compareAndSwapNumber(size_t *reg, size_t oldValue, size_t newValue) {
+	CASAtomic.lock();
+	if (*reg = oldValue) {
+		*reg = newValue;
+		CASAtomic.unlock();
+		return true;
+	}
+	else {
+		CASAtomic.unlock();
+		return false;
+	}
+}
+
+bool compareAndSwapChunkPointer(ChunkPointer * reg, ChunkPointer oldValue, ChunkPointer newValue) {
+	CASAtomic.lock();
+	if (*reg = oldValue) {
+		*reg = newValue;
+		CASAtomic.unlock();
+		return true;
+	}
+	else {
+		CASAtomic.unlock();
+		return false;
+	}
+}
+//想了一下入栈这个应该是没有意义的
+//bool compareAndPushList(ChunkList tempList, ChunkPointer oldChunk, ChunkPointer newChunk) {
+//	CASAtomic.lock();
+//	if (*tempList.begin() == oldChunk) {
+//		tempList.push_front(newChunk);
+//		CASAtomic.unlock();
+//		return true;
+//	}
+//	else {
+//		CASAtomic.unlock();
+//		return false;
+//	}
+//}
+
+bool compareAndPopList(ChunkList tempList, ChunkPointer oldChunk) {
+	CASAtomic.lock();
+	ChunkPointer tempChunk= *tempList.end();
+	if (*tempList.end() == oldChunk) {
+		tempList.pop_back();
+		CASAtomic.unlock();
+		return tempChunk;
+	}
+	else {
+		CASAtomic.unlock();
+		return false;
+	}
+}
 
 
 
@@ -72,12 +130,20 @@ void myMallocInit(void) {
 //放入smallbin
 void putInSmallBin(ChunkPointer thisChunk) {
 	int index = thisChunk->size CHUNK_SIZE_MASK / 8 - 1;
+	ChunkPointer oldChunk;
+	//do {
+	//	oldChunk = *smallMemoryBin[index].begin();
+	//} while (!compareAndPushList(smallMemoryBin[index],oldChunk,thisChunk));
+	smallBinLock.lock();
 	smallMemoryBin[index].push_front(thisChunk);
+	smallBinLock.unlock();
 }
 
 //放入largebin
 void putInLargeBin(ChunkPointer thisChunk) {
+	largeBinLock.lock();
 	largeBin.insert(std::map<size_t, ChunkPointer>::value_type(thisChunk->size CHUNK_SIZE_MASK, thisChunk));
+	largeBinLock.unlock();
 }
 
 //功能：得到下一个Chunk
@@ -89,7 +155,13 @@ ChunkPointer getNextChunk(ChunkPointer thisChunk) {
 //功能：将边缘Chunk合并进TopChunk
 int mergeEdgeChunkToTopChunk(ChunkPointer chunkToMerge) {
 	heapMemory = (PVOID)chunkToMerge;
-	hMemoryLeft = hMemoryLeft + (chunkToMerge->size CHUNK_SIZE_MASK) + 8;
+
+	size_t oldMemLeft;
+	do {
+		oldMemLeft = hMemoryLeft;
+	} while (!compareAndSwapNumber(&hMemoryLeft, oldMemLeft, oldMemLeft + (chunkToMerge->size CHUNK_SIZE_MASK) + 8));
+
+	//hMemoryLeft = hMemoryLeft + (chunkToMerge->size CHUNK_SIZE_MASK) + 8;
 
 	//清零
 	ZeroMemory((PVOID)heapMemory, (edgeChunk->size CHUNK_SIZE_MASK) + 8);
@@ -123,8 +195,13 @@ int nextChunkIsInUse(ChunkPointer thisChunk) {
 //返回：返回合并后的Chunk
 ChunkPointer mergeThisChunkToPreChunk(ChunkPointer thisChunk) {
 	size_t mergedChunkSize = (thisChunk->size CHUNK_SIZE_MASK) + thisChunk->preSize + 8;		//合并之后的实际大小为这个数据块的大小加8Bsize位加前一个块的大小
-	if (thisChunk == edgeChunk) {				
-		edgeChunk = (ChunkPointer)((char *)edgeChunk - edgeChunk->preSize - 8);
+	if (thisChunk == edgeChunk) {	
+		ChunkPointer oldChunkPointer;
+		do {
+			oldChunkPointer = edgeChunk;
+		} while (!compareAndSwapChunkPointer(&edgeChunk, oldChunkPointer,\
+			(ChunkPointer)((char *)oldChunkPointer - oldChunkPointer->preSize - 8)));
+		//edgeChunk = (ChunkPointer)((char *)edgeChunk - edgeChunk->preSize - 8);
 	}
 	thisChunk = (ChunkPointer)((char *)thisChunk - thisChunk->preSize - 8);	 //此块地址移动到前一个块地址
 	thisChunk->size = (thisChunk->size CHUNK_SIGN_MASK) + mergedChunkSize;   //更新新块的size并补充标志位
@@ -165,6 +242,7 @@ int setThisChunkUnuse(ChunkPointer thisChunk) {
 //功能：在fastbin里找到一个符合要求的块
 ChunkPointer searchFastBin(size_t sizeOfChunk) {
 	ChunkList::iterator it;
+	fastBinLock.lock();
 	for (it = fastBin.begin(); it != fastBin.end(); it++) {
 		ChunkPointer tempChunkPointer = *it;
 		if (tempChunkPointer->size == sizeOfChunk) {
@@ -172,6 +250,7 @@ ChunkPointer searchFastBin(size_t sizeOfChunk) {
 			return tempChunkPointer;
 		}
 	}
+	fastBinLock.unlock();
 	return NULL;
 }
 
@@ -183,7 +262,9 @@ ChunkPointer searchSmallBin(size_t sizeOfChunk) {
 	}
 	else {
 		ChunkList::iterator it = smallMemoryBin[index].end();   //从尾部得到一个块
+		smallBinLock.lock();
 		smallMemoryBin[index].pop_back();						//删除尾部
+		smallBinLock.unlock();
 		ChunkPointer tempChunkPointer = *it;
 
 		return tempChunkPointer;
@@ -193,13 +274,14 @@ ChunkPointer searchSmallBin(size_t sizeOfChunk) {
 //功能：在largebin里按最优分配算法找一个最符合要求的块并切割
 ChunkPointer searchLargeBin(size_t sizeOfChunk) {
 	std::map<size_t, ChunkPointer>::iterator it;
-
+	largeBinLock.lock();
 	for (it = largeBin.begin(); it != largeBin.end(); it++) {
 		ChunkPointer tempChunkPointer = it->second;
 		if ((tempChunkPointer->size CHUNK_SIZE_MASK) >= sizeOfChunk) {
 			size_t leftChunkSize = (tempChunkPointer->size CHUNK_SIZE_MASK) - 8 - sizeOfChunk; //被切割走数据块大小和标志位大小
 			if (leftChunkSize < 16) {														   //为了防止以后出bug，剩下的块太小的话就都分给人家
 				largeBin.erase(it);
+				largeBinLock.unlock();
 				return tempChunkPointer;
 			}
 			//创建剩下部分的块信息
@@ -213,11 +295,11 @@ ChunkPointer searchLargeBin(size_t sizeOfChunk) {
 			else {
 				putInSmallBin(leftChunkPointer);
 			}
-
+			largeBinLock.unlock();
 			return tempChunkPointer;
 		}
 	}
-
+	largeBinLock.unlock();
 	return NULL;
 }
 
@@ -227,6 +309,8 @@ ChunkPointer searchLargeBin(size_t sizeOfChunk) {
 //合并思路：遍历所有fastbin chunk将其下一个块的preUse置为0，然后重新遍历所有找preUse为0的。向前递归合并。
 void cleanFastBin(void) {
 	ChunkList::iterator it;
+	fastBinLock.lock();
+	smallBinLock.lock();
 	//修改标志过程
 	for (it = fastBin.begin(); it != fastBin.end(); it++) {
 		ChunkPointer tempChunkPointer = *it;
@@ -249,11 +333,15 @@ void cleanFastBin(void) {
 	smallMemoryBin[0].erase(unique(smallMemoryBin[0].begin(), smallMemoryBin[0].end()), smallMemoryBin[0].end());
 	//合并所有的fastbin块后 将fastbin清空
 	fastBin.clear();
+	smallBinLock.unlock();
+	fastBinLock.unlock();
 }
 
 //功能：整理unsortbin进入smallbin和largebin
 void cleanUnsortBin(void) {
 	ChunkList::iterator it;
+	smallBinLock.lock();
+	largeBinLock.lock();
 
 	for (it = smallMemoryBin[0].begin(); it != smallMemoryBin[0].end(); it++) {
 		ChunkPointer tempChunkPointer = *it;
@@ -266,21 +354,27 @@ void cleanUnsortBin(void) {
 	}
 
 	smallMemoryBin[0].clear();
+	smallBinLock.unlock();
+	largeBinLock.unlock();
 }
 
 //功能：把一个块放入unsortBin
 void putInUnsortBin(ChunkPointer thisChunk) {
+	smallBinLock.lock();
 	smallMemoryBin[0].push_front(thisChunk);
 	setThisChunkUnuse(thisChunk);
+	smallBinLock.unlock();
 }
 //功能：在unsortBin找一个合适的块切割或直接返回
 ChunkPointer searchUnsortBin(size_t wannaSize) {
+	smallBinLock.lock();
 	ChunkPointer unsortBinResult = *smallMemoryBin[0].begin();
 	size_t leftChunkSize = (unsortBinResult->size CHUNK_SIZE_MASK) - 8 - wannaSize; //被切割走数据块大小和标志位大小
 																					   //size_t theChunkSign = unsortBinResult->size CHUNK_SIGN_MASK;
 																					   //size_t theChunkPreSize = unsortBinResult->preSize;
 	if (leftChunkSize < 16) {														   //为了防止以后出bug，剩下的块太小的话就都分给人家
 		smallMemoryBin[0].pop_back();
+		smallBinLock.unlock();
 		return unsortBinResult;
 	}
 	//创建剩下部分的块信息
@@ -293,7 +387,7 @@ ChunkPointer searchUnsortBin(size_t wannaSize) {
 
 
 	unsortBinResult->size = wannaSize + unsortBinResult->size CHUNK_SIGN_MASK;      //更新切割出块的信息 仅有size变了
-
+	smallBinLock.unlock();
 	return unsortBinResult;
 }
 
@@ -303,8 +397,14 @@ ChunkPointer newChunkFromTopChunk(size_t sizeOfMemoryInBytes) {
 	if (sizeOfMemoryInBytes > 0 && sizeOfMemoryInBytes<= hMemoryLeft) {
 		ChunkPointer newChunk = (ChunkPointer)heapMemory;
 
-		heapMemory = (char *)heapMemory + realDataSize + 8;
-		hMemoryLeft = hMemoryLeft - realDataSize - 8;   //消耗已提交页共数据块+数据大小标志区
+		//CAS操作改变剩余内存
+		size_t oldHMemoryLeft;
+		do {
+			oldHMemoryLeft = hMemoryLeft;
+		} while (!compareAndSwapNumber(&hMemoryLeft, oldHMemoryLeft, oldHMemoryLeft - realDataSize - 8));
+
+		//hMemoryLeft = hMemoryLeft - realDataSize - 8;   //消耗已提交页共数据块+数据大小标志区
+
 		if (edgeChunk) {								//如果存在edgeChunk说明并非第一次分配内存,edgeChunk将是前一个块,并且前一个块要么在fastBin里要么还在使用
 			newChunk->preSize = edgeChunk->size;
 			newChunk->size = realDataSize;
@@ -316,12 +416,7 @@ ChunkPointer newChunkFromTopChunk(size_t sizeOfMemoryInBytes) {
 			newChunk->size = newChunk->size SET_PRE_IN_USE; //如果不存在edgeChunk 说明是第一个Chunk，P应设置为inuse防止越界
 		}
 
-		//newChunk->size = realDataSize;
 		edgeChunk = newChunk;
-		//if (NumberOfChunks == 0) {
-		//	newChunk->size = newChunk->size SET_PRE_IN_USE;
-		//}
-		//NumberOfChunks++;
 		return newChunk;				//返回新分配块的数据块地址
 	}
 	else {
