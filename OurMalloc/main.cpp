@@ -4,6 +4,7 @@
 #include <Windows.h>
 #include <mutex>
 #include <algorithm> 
+#include <thread>
 
 //32Bit system size_t is 4 bytes
 #ifndef INTERNAL_SIZE_T 
@@ -91,19 +92,19 @@ bool compareAndSwapChunkPointer(ChunkPointer * reg, ChunkPointer oldValue, Chunk
 //	}
 //}
 
-bool compareAndPopList(ChunkList tempList, ChunkPointer oldChunk) {
-	CASAtomic.lock();
-	ChunkPointer tempChunk= *tempList.end();
-	if (*tempList.end() == oldChunk) {
-		tempList.pop_back();
-		CASAtomic.unlock();
-		return tempChunk;
-	}
-	else {
-		CASAtomic.unlock();
-		return false;
-	}
-}
+//bool compareAndPopList(ChunkList tempList, ChunkPointer oldChunk) {
+//	CASAtomic.lock();
+//	ChunkPointer tempChunk= *tempList.end();
+//	if (*tempList.end() == oldChunk) {
+//		tempList.pop_back();
+//		CASAtomic.unlock();
+//		return tempChunk;
+//	}
+//	else {
+//		CASAtomic.unlock();
+//		return false;
+//	}
+//}
 
 
 
@@ -548,6 +549,20 @@ int myFree(char * memToFree) {
 
 	return 0;
 }
+void test(void) {
+	char * temp = myMalloc(500);
+
+	myFree(temp);
+
+	char * temp2 = myMalloc(10);
+
+	myFree(temp2);
+
+	char * temp3 = myMalloc(102400);
+
+	myFree(temp3);
+
+}
 
 int main(void) {
 	myMallocInit();
@@ -556,16 +571,19 @@ int main(void) {
 	std::cout << "HelloWorld!" << std::endl;
 
 
-	char * testMemory = myMalloc(11);
+	//char * testMemory = myMalloc(11);
+	for (int i = 0; i < 100; i++) {
+		std::thread t(test);
+		t.join();
+	}
 
-
-	myFree(testMemory);
-	testMemory = myMalloc(1024);
-	myFree(testMemory);
-	testMemory = myMalloc(512);
-	myFree(testMemory);
-	testMemory = myMalloc(1024000);
-	myFree(testMemory);
+	//myFree(testMemory);
+	//testMemory = myMalloc(1024);
+	//myFree(testMemory);
+	//testMemory = myMalloc(512);
+	//myFree(testMemory);
+	//testMemory = myMalloc(1024000);
+	//myFree(testMemory);
 	std::cin.get();
 	return 0;
 }
