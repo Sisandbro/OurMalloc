@@ -55,7 +55,7 @@ std::mutex fastBinLock;
 std::mutex CASAtomic;
 bool compareAndSwapNumber(size_t *reg, size_t oldValue, size_t newValue) {
 	CASAtomic.lock();
-	if (*reg = oldValue) {
+	if (*reg == oldValue) {
 		*reg = newValue;
 		CASAtomic.unlock();
 		return true;
@@ -68,7 +68,7 @@ bool compareAndSwapNumber(size_t *reg, size_t oldValue, size_t newValue) {
 
 bool compareAndSwapChunkPointer(ChunkPointer * reg, ChunkPointer oldValue, ChunkPointer newValue) {
 	CASAtomic.lock();
-	if (*reg = oldValue) {
+	if (*reg == oldValue) {
 		*reg = newValue;
 		CASAtomic.unlock();
 		return true;
@@ -549,41 +549,32 @@ int myFree(char * memToFree) {
 
 	return 0;
 }
-void test(void) {
+void test(int n) {
+
+	std::cout << "This is the" << n << "thread" << std::endl;
 	char * temp = myMalloc(500);
-
 	myFree(temp);
-
 	char * temp2 = myMalloc(10);
-
 	myFree(temp2);
-
 	char * temp3 = myMalloc(102400);
-
 	myFree(temp3);
+	std::cout << "Malloc and free successful!" << std::endl;
 
 }
 
 int main(void) {
 	myMallocInit();
-	std::cout << alignTo(1, MALLOC_ALIGNMENT) << std::endl;
-	std::cout << alignTo(511, MALLOC_ALIGNMENT) << std::endl;
+	//std::cout << alignTo(1, MALLOC_ALIGNMENT) << std::endl;
+	//std::cout << alignTo(511, MALLOC_ALIGNMENT) << std::endl;
 	std::cout << "HelloWorld!" << std::endl;
 
 
 	//char * testMemory = myMalloc(11);
 	for (int i = 0; i < 100; i++) {
-		std::thread t(test);
+		std::thread t(test,i);
 		t.join();
 	}
 
-	//myFree(testMemory);
-	//testMemory = myMalloc(1024);
-	//myFree(testMemory);
-	//testMemory = myMalloc(512);
-	//myFree(testMemory);
-	//testMemory = myMalloc(1024000);
-	//myFree(testMemory);
 	std::cin.get();
 	return 0;
 }
